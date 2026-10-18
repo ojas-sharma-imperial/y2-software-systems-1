@@ -38,10 +38,15 @@ static inline void reap()
 void read_command_line(char line[]);
 void construct_shell_prompt(char shell_prompt[]);
 void parse_command(char line[], char *args[], int *argsc);
+void parse_command_with_redirection(char line[], char *args[], int *argsc, char **input_file, char **output_file, int *append_output);
 
 ///Child functions (add more as appropriate)
 void child(char *args[], int argsc);
+void child_with_redirected_input(char *args[], int argsc, int fd);
+void child_with_redirected_output(char *args[], int argsc, int fd);
 
 ///Program launching functions (add more as appropriate)
 void launch_program(char *args[], int argsc);
+void launch_program_with_redirection(char *args[], int argsc, int redirection, char **input_file, char **output_file, int *append_output);
+int command_with_redirection(char line[]);
 #endif
