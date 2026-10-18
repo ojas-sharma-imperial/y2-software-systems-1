@@ -45,23 +45,35 @@ void parse_command(char line[], char *args[], int *argsc)
 ///Launch related functions
 void child(char *args[], int argsc)
 {
-    ///Implement this function:
+    execvp(args[ARG_PROGNAME], args); // execvp the child to a different program
 
-    ///Use execvp to load the binary 
-    ///of the command specified in args[ARG_PROGNAME].
-    ///For reference, see the code in lecture 3.
+    perror("execvp failed"); // only reach here if execvp fails
+    exit(1); // exit child with error
 }
 
 void launch_program(char *args[], int argsc)
 {
-    ///Implement this function:
+    if (argsc == 0) { // no command
+        perror("no command entered");
+        exit(1);
+    }
 
-    ///fork() a child process.
-    ///In the child part of the code,
-    ///call child(args, argv)
-    ///For reference, see the code in lecture 2.
+    if (strcmp(args[ARG_PROGNAME], "exit") == 0) { // handle exit command BEFORE forking so shell closes not just child
+        exit(0);
+    }
 
-    ///Handle the 'exit' command;
-    ///so that the shell, not the child process,
-    ///exits.
+    int rc = fork(); // fork a child (return code)
+
+    if (rc < 0) { // fork failed
+        perror("child process fork failed");
+        exit(1);
+    } else if (rc == 0) { // child process
+        child(args, argsc);
+    } else { // parent process
+        int wc = wait(NULL); // wait for child to finish (wait code)
+        if (wc == -1) { // wait failed
+            perror("wait failed");
+            exit(1);
+        } // else positive wc gives child process completion
+    }
 }
