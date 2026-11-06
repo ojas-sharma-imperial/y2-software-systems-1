@@ -1,9 +1,31 @@
 #include "s3.h"
 
+// State Variables
+
+char PREV_DIR[MAX_LINE]; // store the previous working directory (for cd)
+
 ///Simple for now, but will be expanded in a following section
 void construct_shell_prompt(char shell_prompt[])
 {
-    strcpy(shell_prompt, "[s3]$ ");
+    char cwd[MAX_LINE];
+    getcwd(cwd, sizeof(cwd)); // get current working directory
+
+    strcpy(shell_prompt, "[");
+    strcat(shell_prompt, cwd);
+    strcat(shell_prompt, " s3]$ ");
+}
+
+void handle_cd(char *args[], int argsc) {
+    if (args[ARG_1] == NULL) { // cd to HOME
+        getcwd(PREV_DIR, sizeof(PREV_DIR)); // store the cwd BEFORE cd
+        chdir(getenv("HOME"));
+    } else if (strcmp(args[ARG_1], "-") == 0) { // cd to previous
+        chdir(PREV_DIR);
+        getcwd(PREV_DIR, sizeof(PREV_DIR)); // store the cwd AFTER cd to set new directory to previous 
+    } else { // standard cd
+        getcwd(PREV_DIR, sizeof(PREV_DIR)); // store the cwd BEFORE cd
+        chdir(args[ARG_1]);
+    }
 }
 
 int command_with_redirection(char line[]) { // check whether command has redirection; return 1 if true else 0
@@ -45,6 +67,7 @@ void parse_command(char line[], char *args[], int *argsc)
     ///See the man page of strtok(...)
     char *token = strtok(line, " ");
     *argsc = 0;
+
     while (token != NULL && *argsc < MAX_ARGS - 1)
     {
         args[(*argsc)++] = token;
@@ -112,6 +135,11 @@ void launch_program(char *args[], int argsc)
         exit(0);
     }
 
+    if (strcmp(args[ARG_PROGNAME], "cd") == 0) { // handle cd command instead of forking a child
+        handle_cd(args, argsc);
+        return;
+    }
+
     int rc = fork(); // fork a child (return code)
 
     if (rc < 0) { // fork failed
@@ -136,6 +164,11 @@ void launch_program_with_redirection(char *args[], int argsc, int redirection, c
 
     if (strcmp(args[ARG_PROGNAME], "exit") == 0) { // handle exit command BEFORE forking so shell closes not just child (shouldn't be possible to reach this)
         exit(0);
+    }
+
+    if (strcmp(args[ARG_PROGNAME], "cd") == 0) { // handle cd command instead of forking a child
+        handle_cd(args, argsc);
+        return;
     }
 
     if (redirection == 1) { // output redirection
