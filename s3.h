@@ -16,6 +16,11 @@
 #define MAX_ARGS 128
 #define MAX_PROMPT_LEN 256
 
+/// Define the pipe ends for readability
+
+#define READ_END 0
+#define WRITE_END 1
+
 ///Enum for readable argument indices (use where required)
 enum ArgIndex
 {
@@ -49,4 +54,9 @@ void child_with_redirected_output(char *args[], int argsc, int fd);
 void launch_program(char *args[], int argsc);
 void launch_program_with_redirection(char *args[], int argsc, int redirection, char **input_file, char **output_file, int *append_output);
 int command_with_redirection(char line[]);
+
+// New master instructions supporting pipes
+void master_child(char *args[], int argsc, int input_fd, int output_fd, char *input_file, char *output_file, int *append_output);
+int setup_child(char *args[], int argsc, int input_fd, int output_fd, int unused_read_fd, char *input_file, char *output_file, int *append_output);
+void launch_program_master(char line[]);
 #endif
