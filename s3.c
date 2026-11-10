@@ -3,6 +3,8 @@
 // State Variables
 
 char PREV_DIR[MAX_LINE]; // store the previous working directory (for cd)
+char PROMPTS[MAX_LINE][MAX_PROMPT_LEN]; // store all prompts in an array of length MAX_LINE, each entry with length MAX_PROMPT_LEN
+int prompt_num = 0;
 
 ///Simple for now, but will be expanded in a following section
 void construct_shell_prompt(char shell_prompt[])
@@ -62,6 +64,7 @@ void read_command_line(char line[])
     }
     ///Remove newline (enter)
     line[strlen(line) - 1] = '\0';
+    strcpy(PROMPTS[prompt_num++], line); // store current command in array and interate
 }
 
 void parse_command(char line[], char *args[], int *argsc)
@@ -232,15 +235,30 @@ void launch_program_master(char line[]) {
     int rcs[MAX_LINE]; // store rcs (return codes) of children split by pipes
     int num_commands = 1;
 
+    int subshell_depth = 0; // deal with nested subshells
+
     commands[0] = line;
     for (char *p = line; *p != '\0'; p++) { // run through characters in line (until null)
-        if ((*p == '|') || (*p == ';')) {
+        if (*p == '(') {
+            subshell_depth++;
+        } else if (*p == ')') {
+            subshell_depth--;
+            if (subshell_depth < 0) { // brackets not closed
+                perror("unmatched parentheses");
+                exit(1);
+            }
+        } else if (((*p == '|') || (*p == ';')) && (subshell_depth == 0)) {
             delimiters[num_commands - 1] = *p; // store what type of delimiter it is
             *p = '\0'; // terminate that command
             commands[num_commands++] = p + 1; // next command starts after the pipe or semicolon
         }
     }
-    delimiters[num_commands - 1] = ';'; // last command has no pipe etc.
+    if (subshell_depth != 0) { // brackets not closed somewhere
+        perror("unmatched parentheses");
+        exit(1);
+    }
+
+    delimiters[num_commands - 1] = ';'; // last command has no pipe etc. so consider it terminated by a semicolon for simplicity
 
     int prev_fd = -1;
     int previous_stage = 0;
@@ -252,19 +270,50 @@ void launch_program_master(char line[]) {
         int append_output = 0;
         char *input_file, *output_file;
 
-        parse_command_with_redirection(commands[stage], args, &argsc, &input_file, &output_file, &append_output);
+        char *start = commands[stage]; // check if stage has subshell
+        start += strspn(start, " \t"); // skip leading space(s) after a pipe etc.
+
+        if (*start == '(') { // handle subshell recursive argument form
+            subshell_depth = 0;
+            char *ending = NULL; // pointer to end of outermost subshell
+            for (char *p = start; *p != '\0'; p++) {
+                if (*p == '(') {
+                    subshell_depth++;
+                } else if (*p == ')') {
+                    if (subshell_depth == 1) { // found end of outermost subshell
+                        ending = p;
+                        break;
+                    }
+                    subshell_depth--;
+                }
+            }
+
+            *ending = '\0'; // end the subshell command
+            char *subshell_args[MAX_ARGS]; // needed as these args are appended to an additional set of args to enable recursion
+            int subshell_argsc = 0;
+            parse_command_with_redirection(ending+1, subshell_args, &subshell_argsc, &input_file, &output_file, &append_output); // parse the subshell command
+
+            args[ARG_PROGNAME] = "/proc/self/exe"; // fancy linux file that runs the current executable
+            args[ARG_1] = "-s";
+            args[ARG_2] = start + 1; // ignore the opening parenthesis
+            args[ARG_3] = NULL;
+            argsc = 3;
+        } else { // handle normal command (with no subshell)
+            parse_command_with_redirection(commands[stage], args, &argsc, &input_file, &output_file, &append_output);
+        }
+
         if (argsc == 0) {
-            perror("empty pipe stage");
+            perror("no command arguments");
             exit(1);
         }
 
         if (strcmp(args[ARG_PROGNAME], "exit") == 0) { // handle exit command BEFORE forking so shell closes not just child
-        exit(0);
+            exit(0);
         }
 
         if (strcmp(args[ARG_PROGNAME], "cd") == 0) { // handle cd command instead of forking a child
             handle_cd(args, argsc);
-            return;
+            continue;
         }
 
         if (delimiters[stage] == '|') {
@@ -274,8 +323,8 @@ void launch_program_master(char line[]) {
                 exit(1);
             }
 
+            rcs[current_stage] = setup_child(args, argsc, prev_fd, fd[WRITE_END], fd[READ_END], input_file, output_file, &append_output);
             current_stage++;
-            rcs[stage] = setup_child(args, argsc, prev_fd, fd[WRITE_END], fd[READ_END], input_file, output_file, &append_output);
 
             if (prev_fd != -1) { // "shift" the pipe stages and close off unnecessary fds in the parent
                 close(prev_fd);
@@ -286,8 +335,8 @@ void launch_program_master(char line[]) {
             prev_fd = fd[READ_END];
 
         } else if (delimiters[stage] == ';') {
+            rcs[current_stage] = setup_child(args, argsc, prev_fd, -1, -1, input_file, output_file, &append_output);
             current_stage++;
-            rcs[stage] = setup_child(args, argsc, prev_fd, -1, -1, input_file, output_file, &append_output);
 
             if (prev_fd != -1) { // parent close its copy of the read end of the pipe
                 close(prev_fd);
