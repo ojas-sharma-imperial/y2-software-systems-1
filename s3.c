@@ -16,12 +16,14 @@ void construct_shell_prompt(char shell_prompt[])
 }
 
 void handle_cd(char *args[], int argsc) {
+    char temp[MAX_LINE];
     if (args[ARG_1] == NULL) { // cd to HOME
         getcwd(PREV_DIR, sizeof(PREV_DIR)); // store the cwd BEFORE cd
         chdir(getenv("HOME"));
     } else if (strcmp(args[ARG_1], "-") == 0) { // cd to previous
+        getcwd(temp, sizeof(temp));
         chdir(PREV_DIR);
-        getcwd(PREV_DIR, sizeof(PREV_DIR)); // store the cwd AFTER cd to set new directory to previous 
+        strcpy(PREV_DIR, temp);
     } else { // standard cd
         getcwd(PREV_DIR, sizeof(PREV_DIR)); // store the cwd BEFORE cd
         chdir(args[ARG_1]);
@@ -226,20 +228,25 @@ void launch_program_with_redirection(char *args[], int argsc, int redirection, c
 
 void launch_program_master(char line[]) {
     char *commands[MAX_LINE]; // commands split by pipes
+    char delimiters[MAX_LINE]; // for parser to understand pipes/semicolons/etc.
     int rcs[MAX_LINE]; // store rcs (return codes) of children split by pipes
-    int num_commands = 0;
+    int num_commands = 1;
 
-    commands[num_commands++] = line;
+    commands[0] = line;
     for (char *p = line; *p != '\0'; p++) { // run through characters in line (until null)
-        if (*p == '|') {
+        if ((*p == '|') || (*p == ';')) {
+            delimiters[num_commands - 1] = *p; // store what type of delimiter it is
             *p = '\0'; // terminate that command
-            commands[num_commands++] = p + 1; // next command starts after the pipe
+            commands[num_commands++] = p + 1; // next command starts after the pipe or semicolon
         }
     }
+    delimiters[num_commands - 1] = ';'; // last command has no pipe etc.
 
     int prev_fd = -1;
+    int previous_stage = 0;
+    int current_stage = 0;
 
-    for (int stage = 0; stage < num_commands; stage++) { // iterate through each piped command
+    for (int stage = 0; stage < num_commands; stage++) { // iterate through each piped or terminated command
         char* args[MAX_ARGS];
         int argsc = 0;
         int append_output = 0;
@@ -260,31 +267,43 @@ void launch_program_master(char line[]) {
             return;
         }
 
-        int fd[2] = {-1, -1};
-        if ((stage < num_commands - 1) && (pipe(fd) < 0)) {
-            perror("pipe failed");
-            exit(1);
-        }
+        if (delimiters[stage] == '|') {
+            int fd[2] = {-1, -1};
+            if ((stage < num_commands - 1) && (pipe(fd) < 0)) {
+                perror("pipe failed");
+                exit(1);
+            }
 
-        rcs[stage] = setup_child(args, argsc, prev_fd, fd[WRITE_END], fd[READ_END], input_file, output_file, &append_output);
+            current_stage++;
+            rcs[stage] = setup_child(args, argsc, prev_fd, fd[WRITE_END], fd[READ_END], input_file, output_file, &append_output);
 
-        if (prev_fd != -1) { // "shift" the pipe stages and close off unnecessary fds in the parent
-            close(prev_fd);
+            if (prev_fd != -1) { // "shift" the pipe stages and close off unnecessary fds in the parent
+                close(prev_fd);
+            }
+            if (fd[WRITE_END] != -1) {
+                close(fd[WRITE_END]);
+            }
+            prev_fd = fd[READ_END];
+
+        } else if (delimiters[stage] == ';') {
+            current_stage++;
+            rcs[stage] = setup_child(args, argsc, prev_fd, -1, -1, input_file, output_file, &append_output);
+
+            if (prev_fd != -1) { // parent close its copy of the read end of the pipe
+                close(prev_fd);
+                prev_fd = -1;
+            }
+
+            for (int stage = previous_stage; stage < current_stage; stage++) {
+                int wc = waitpid(rcs[stage], NULL, 0); // wait for all child processes to finish
+                if (wc < 0) {
+                    perror("waitpid failed");
+                    exit(1);
+                }
+            }
+            previous_stage = current_stage;
         }
-        if (fd[WRITE_END] != -1) {
-            close(fd[WRITE_END]);
-        }
-        prev_fd = fd[READ_END];
     }
-
-    for (int stage = 0; stage < num_commands; stage++) {
-        int wc = waitpid(rcs[stage], NULL, 0);
-        if (wc < 0) {
-            perror("waitpid failed");
-            exit(1);
-        }
-    }
-
 }
 
 int setup_child(char *args[], int argsc, int input_fd, int output_fd, int unused_read_fd, char *input_file, char *output_file, int *append_output) {
